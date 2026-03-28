@@ -163,38 +163,115 @@ export default function CourierEntries() {
 
   const processImport = async () => {
     try {
+      const columnAliases = {
+        sNo: ['sno', 's.no', 'serial', 'no', 'sr no', 'sr.no'],
+        date: ['date', 'entry date', 'booking date'],
+        client: ['client', 'party', 'party name', 'customer', 'consignor'],
+        courier: ['courier', 'courier name', 'service', 'company'],
+        docket: ['docket', 'docket no', 'awb', 'tracking', 'consignment no'],
+        weight: ['weight', 'actual weight', 'wt'],
+        destination: ['destination', 'city', 'to', 'place'],
+        vWeight: ['vweight', 'volumetric weight', 'v weight', 'dim weight'],
+        mode: ['mode', 'type', 'shipment type'],
+        comments: ['comments', 'remarks', 'note', 'description'],
+        amount: ['amount', 'rate', 'price', 'charges'],
+        gstRate: ['gstrate', 'gst', 'tax', 'gst %']
+      };
+
+      const getValue = (row: any, aliases: string[]) => {
+        const key = Object.keys(row).find(k => 
+          aliases.includes(k.toLowerCase().trim())
+        );
+        return key ? row[key] : undefined;
+      };
+
+      // 1. Identify all unique client names from import data
+      const uniqueClientNames: string[] = Array.from(new Set(importData.map(row => 
+        getValue(row, columnAliases.client)?.toString().trim()
+      ).filter(Boolean))) as string[];
+
+      // 2. Find which clients are missing
+      const existingClients = await api.get('/clients');
+      const missingClientNames = uniqueClientNames.filter(name => 
+        !existingClients.find((c: any) => c.name.toLowerCase() === name.toLowerCase())
+      );
+
+      // 3. Create missing clients
+      if (missingClientNames.length > 0) {
+        toast.info(`Creating ${missingClientNames.length} new clients...`);
+        for (const name of missingClientNames) {
+          await api.post('/clients', { name });
+        }
+        // Refresh clients list
+        await fetchClients();
+      }
+
+      // 4. Re-fetch clients to get all IDs
+      const allClients = await api.get('/clients');
+
+      // 5. Format entries
       const formattedEntries = importData.map(row => {
-        const client = clients.find(c => c.name.toLowerCase() === row.Client?.toString().toLowerCase());
-        if (!client) throw new Error(`Client not found: ${row.Client}`);
+        const clientName = getValue(row, columnAliases.client)?.toString().trim() || '';
+        const client = allClients.find((c: any) => c.name.toLowerCase() === clientName.toLowerCase());
         
-        const amount = parseFloat(row.Amount) || 0;
-        const gstRate = parseFloat(row.GSTRate) || 18;
+        if (!client && clientName) {
+          throw new Error(`Failed to resolve client: ${clientName}`);
+        }
+
+        const amount = parseFloat(getValue(row, columnAliases.amount)) || 0;
+        const gstRate = parseFloat(getValue(row, columnAliases.gstRate)) || 18;
         const totalAmount = amount + (amount * gstRate / 100);
         
+        // Handle Excel date format
+        let dateVal = getValue(row, columnAliases.date);
+        let formattedDate = format(new Date(), 'yyyy-MM-dd');
+        
+        if (dateVal) {
+          if (typeof dateVal === 'number') {
+            // Excel serial date
+            const date = new Date((dateVal - 25569) * 86400 * 1000);
+            formattedDate = format(date, 'yyyy-MM-dd');
+          } else {
+            try {
+              const date = new Date(dateVal);
+              if (!isNaN(date.getTime())) {
+                formattedDate = format(date, 'yyyy-MM-dd');
+              }
+            } catch (e) {
+              console.error('Date parsing error:', e);
+            }
+          }
+        }
+
         return {
-          sNo: row.SNo?.toString() || '',
-          date: row.Date || format(new Date(), 'yyyy-MM-dd'),
-          clientId: client.id,
-          clientName: client.name,
-          courierName: row.Courier || '',
-          docketNo: row.Docket?.toString() || '',
-          weight: parseFloat(row.Weight) || 0,
-          destination: row.Destination || '',
-          vWeight: parseFloat(row.VWeight) || 0,
-          mode: row.Mode || 'Surface',
-          comments: row.Comments || '',
+          sNo: getValue(row, columnAliases.sNo)?.toString() || '',
+          date: formattedDate,
+          clientId: client?.id || '',
+          clientName: client?.name || clientName || 'Unknown',
+          courierName: getValue(row, columnAliases.courier) || '',
+          docketNo: getValue(row, columnAliases.docket)?.toString() || '',
+          weight: parseFloat(getValue(row, columnAliases.weight)) || 0,
+          destination: getValue(row, columnAliases.destination) || '',
+          vWeight: parseFloat(getValue(row, columnAliases.vWeight)) || 0,
+          mode: getValue(row, columnAliases.mode) || 'Surface',
+          comments: getValue(row, columnAliases.comments) || '',
           amount,
           gstRate,
           totalAmount
         };
-      });
+      }).filter(entry => entry.clientId); // Only import entries with a valid client
       
+      if (formattedEntries.length === 0) {
+        throw new Error('No valid entries found to import.');
+      }
+
       await api.post('/entries/bulk', formattedEntries);
       setIsImportModalOpen(false);
       setImportData([]);
-      toast.success('Entries imported successfully!');
+      toast.success(`${formattedEntries.length} entries imported successfully!`);
       fetchEntries();
     } catch (error: any) {
+      console.error('Import error:', error);
       toast.error(`Import failed: ${error.message}`);
     }
   };
@@ -385,9 +462,12 @@ export default function CourierEntries() {
 
               <div className="bg-slate-50 p-4 rounded-2xl mb-6">
                 <p className="text-sm text-slate-600 leading-relaxed">
-                  Please ensure your Excel file has the following columns:
+                  Excel should contain columns like:
                   <span className="block mt-2 font-mono text-xs font-bold text-indigo-600">
-                    SNo, Date, Client, Courier, Docket, Weight, Destination, VWeight, Mode, Comments, Amount, GSTRate
+                    Date, Party Name, Courier, Docket No, Weight, Destination, Amount
+                  </span>
+                  <span className="block mt-1 text-[10px] text-slate-400 italic">
+                    * New clients will be created automatically.
                   </span>
                 </p>
               </div>
@@ -480,14 +560,28 @@ export default function CourierEntries() {
                       </div>
                       
                       <AnimatePresence>
-                        {showClientDropdown && filteredClients.length > 0 && (
+                        {showClientDropdown && (
                           <motion.div 
                             initial={{ opacity: 0, y: -10 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -10 }}
                             className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto"
                           >
-                            {filteredClients.map(client => (
+                            {/* Quick Cash Option */}
+                            <button
+                              type="button"
+                              className="w-full text-left px-4 py-3 hover:bg-indigo-50 transition-colors flex items-center justify-between group border-b border-slate-100"
+                              onClick={() => {
+                                setNewEntry({ ...newEntry, clientId: 'CASH', clientName: 'Cash' });
+                                setClientSearch('Cash');
+                                setShowClientDropdown(false);
+                              }}
+                            >
+                              <span className="font-bold text-indigo-600">Cash Invoice</span>
+                              <ChevronDown className="w-4 h-4 text-indigo-400 group-hover:text-indigo-500 -rotate-90" />
+                            </button>
+
+                            {filteredClients.filter(c => c.id !== 'CASH').map(client => (
                               <button
                                 key={client.id}
                                 type="button"

@@ -38,7 +38,7 @@ export interface Invoice {
   subtotal: number;
   gstTotal: number;
   grandTotal: number;
-  status: 'unpaid' | 'paid';
+  status: 'unpaid' | 'paid' | 'partially paid';
   entryIds: string[];
 }
 

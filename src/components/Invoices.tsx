@@ -20,9 +20,9 @@ const getDirectImageUrl = (url: string) => {
   if (!url) return url;
   
   // Handle Google Drive links
-  const driveMatch = url.match(/\/(?:d|open\?id)=([a-zA-Z0-9_-]+)/);
+  const driveMatch = url.match(/\/(?:d|open\?id|file\/d)\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   if (driveMatch && driveMatch[1]) {
-    return `https://lh3.googleusercontent.com/d/${driveMatch[1]}`;
+    return `https://docs.google.com/uc?export=view&id=${driveMatch[1]}`;
   }
   
   return url;
@@ -53,7 +53,7 @@ export default function Invoices() {
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [invoiceStatus, setInvoiceStatus] = useState<'paid' | 'unpaid'>('unpaid');
+  const [invoiceStatus, setInvoiceStatus] = useState<Invoice['status']>('unpaid');
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importData, setImportData] = useState<any[]>([]);
@@ -85,6 +85,26 @@ export default function Invoices() {
       setUnbilledEntries([]);
     }
   }, [selectedClientId]);
+
+  async function handleStatusUpdate(invoiceId: string, newStatus: Invoice['status']) {
+    try {
+      const invoice = invoices.find(inv => inv.id === invoiceId);
+      if (!invoice) return;
+      
+      await api.put(`/invoices/${invoiceId}`, {
+        ...invoice,
+        status: newStatus
+      });
+      
+      setInvoices(prev => prev.map(inv => 
+        inv.id === invoiceId ? { ...inv, status: newStatus } : inv
+      ));
+      toast.success(`Invoice status updated to ${newStatus}`);
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast.error('Failed to update status');
+    }
+  }
 
   async function fetchInvoices() {
     try {
@@ -282,30 +302,41 @@ export default function Invoices() {
       doc.line(105, 22, 105, 55); // Vertical divider
       
       doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
       doc.text('Invoice No.', 110, 28);
       doc.text('Dated', 160, 28);
-      doc.setFont('helvetica', 'normal');
-      doc.text(invoice.invoiceNo, 110, 33);
-      doc.text(format(new Date(invoice.date), 'dd-MMM-yyyy'), 160, 33);
+      
+      doc.setFontSize(12);
+      doc.setTextColor(79, 70, 229); // Indigo color for prominence
+      doc.text(invoice.invoiceNo, 110, 34);
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(10);
+      doc.text(format(new Date(invoice.date), 'dd-MMM-yyyy'), 160, 34);
       
       doc.line(105, 38, 200, 38);
       doc.setFont('helvetica', 'bold');
-      doc.text('Terms of Payment', 110, 43);
+      doc.setFontSize(9);
+      doc.text('Terms of Payment', 110, 44);
       doc.setFont('helvetica', 'normal');
-      doc.text('Bank Transfer / Cheque', 110, 48);
+      doc.setFontSize(8);
+      doc.text('Bank Transfer / Cheque', 110, 49);
       
       doc.line(10, 55, 200, 55);
       
       // Bill To & Ship To
-      doc.setFillColor(245, 245, 245);
+      doc.setFillColor(248, 250, 252); // Very light slate
       doc.rect(10, 55, 95, 30, 'F'); // Bill To Box
       doc.rect(105, 55, 95, 30, 'F'); // Ship To Box
+      doc.setDrawColor(226, 232, 240); // Slate-200
       doc.line(105, 55, 105, 85); // Middle divider
+      doc.setDrawColor(0, 0, 0); // Reset to black
       
       // Bill To
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('Bill To (Buyer)', 15, 60);
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139); // Slate-500
+      doc.text('BILL TO (BUYER)', 15, 60);
+      doc.setTextColor(0, 0, 0);
       doc.setFontSize(10);
       doc.text(invoice.clientName, 15, 66);
       doc.setFontSize(8);
@@ -316,8 +347,10 @@ export default function Invoices() {
 
       // Ship To
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text('Ship To (Consignee)', 110, 60);
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139); // Slate-500
+      doc.text('SHIP TO (CONSIGNEE)', 110, 60);
+      doc.setTextColor(0, 0, 0);
       doc.setFontSize(10);
       doc.text(invoice.clientName, 110, 66);
       doc.setFontSize(8);
@@ -338,7 +371,7 @@ export default function Invoices() {
         return [
           index + 1,
           `${e.date}\n${e.courierName} - ${e.docketNo}\nDest: ${e.destination}`,
-          '9968', // HSN/SAC Code for Courier
+          '996812', // HSN/SAC Code for Courier
           weight || '-',
           'Nos',
           (amount / (weight || 1)).toFixed(2),
@@ -400,7 +433,7 @@ export default function Invoices() {
       doc.text('HSN/SAC Summary', 15, finalY);
       
       const hsnSummaryData = isIntraState ? [[
-        '9968',
+        '996812',
         invoice.subtotal.toFixed(2),
         '9%',
         (invoice.gstTotal / 2).toFixed(2),
@@ -408,7 +441,7 @@ export default function Invoices() {
         (invoice.gstTotal / 2).toFixed(2),
         invoice.gstTotal.toFixed(2)
       ]] : [[
-        '9968',
+        '996812',
         invoice.subtotal.toFixed(2),
         '18%',
         invoice.gstTotal.toFixed(2),
@@ -647,11 +680,20 @@ export default function Invoices() {
                 <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
                   <FileText className="w-6 h-6" />
                 </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
-                  invoice.status === 'paid' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'
-                }`}>
-                  {invoice.status}
-                </span>
+                <select
+                  value={invoice.status}
+                  onChange={(e) => handleStatusUpdate(invoice.id, e.target.value as Invoice['status'])}
+                  className={cn(
+                    "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border-none focus:ring-2 focus:ring-indigo-500/20 cursor-pointer appearance-none",
+                    invoice.status === 'paid' && "bg-emerald-50 text-emerald-600",
+                    invoice.status === 'unpaid' && "bg-amber-50 text-amber-600",
+                    invoice.status === 'partially paid' && "bg-blue-50 text-blue-600"
+                  )}
+                >
+                  <option value="unpaid">Unpaid</option>
+                  <option value="partially paid">Partially Paid</option>
+                  <option value="paid">Paid</option>
+                </select>
               </div>
               
               <div className="mb-4">
@@ -799,7 +841,8 @@ export default function Invoices() {
                         onChange={(e) => setSelectedClientId(e.target.value)}
                       >
                         <option value="">-- Select Client --</option>
-                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        <option value="CASH">Cash</option>
+                        {clients.filter(c => c.id !== 'CASH').map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                       </select>
                     </div>
                     {editingInvoice && (
@@ -809,9 +852,10 @@ export default function Invoices() {
                           required
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                           value={invoiceStatus}
-                          onChange={(e) => setInvoiceStatus(e.target.value as 'paid' | 'unpaid')}
+                          onChange={(e) => setInvoiceStatus(e.target.value as Invoice['status'])}
                         >
                           <option value="unpaid">Unpaid</option>
+                          <option value="partially paid">Partially Paid</option>
                           <option value="paid">Paid</option>
                         </select>
                       </div>

@@ -105,6 +105,9 @@ db.exec(`
   INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account', '');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_ifsc', '');
   INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_branch', '');
+
+  -- Initialize default 'Cash' client
+  INSERT OR IGNORE INTO clients (id, name, createdAt) VALUES ('CASH', 'Cash', '2024-01-01T00:00:00.000Z');
 `);
 
 async function startServer() {
