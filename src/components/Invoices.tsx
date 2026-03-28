@@ -32,7 +32,10 @@ const loadImage = (url: string): Promise<HTMLImageElement> => {
   return new Promise((resolve, reject) => {
     const directUrl = getDirectImageUrl(url);
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // Only set crossOrigin for non-data URLs to avoid security errors with base64
+    if (directUrl && !directUrl.startsWith('data:')) {
+      img.crossOrigin = 'anonymous';
+    }
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Failed to load image: ' + directUrl));
     img.src = directUrl;
@@ -272,16 +275,6 @@ export default function Invoices() {
       // Border
       doc.rect(10, 10, 190, 277);
       
-      // Logo
-      if (companySettings?.logo_url) {
-        try {
-          const img = await loadImage(companySettings.logo_url);
-          doc.addImage(img, 'PNG', 15, 12, 15, 15);
-        } catch (e) {
-          console.error('Error adding logo to PDF:', e);
-        }
-      }
-      
       // Header
       doc.setFillColor(240, 240, 240);
       doc.rect(10, 10, 190, 12, 'F');
@@ -290,14 +283,29 @@ export default function Invoices() {
       doc.text('TAX INVOICE', 105, 18, { align: 'center' });
       doc.line(10, 22, 200, 22);
       
+      // Logo
+      let logoAdded = false;
+      if (companySettings?.logo_url) {
+        try {
+          const img = await loadImage(companySettings.logo_url);
+          // Place logo at top left below the header
+          doc.addImage(img, 'PNG', 15, 25, 25, 25);
+          logoAdded = true;
+        } catch (e) {
+          console.error('Error adding logo to PDF:', e);
+        }
+      }
+      
       // Company & Invoice Info Grid
+      const companyInfoX = logoAdded ? 45 : 15;
       doc.setFontSize(10);
-      doc.text(companyName, 15, 28);
+      doc.setFont('helvetica', 'bold');
+      doc.text(companyName, companyInfoX, 28);
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
-      doc.text(companyAddress, 15, 33);
-      doc.text(`GSTIN: ${companyGstin}`, 15, 45);
-      doc.text(`Phone: ${companyPhone}`, 15, 50);
+      doc.text(companyAddress, companyInfoX, 33);
+      doc.text(`GSTIN: ${companyGstin}`, companyInfoX, 45);
+      doc.text(`Phone: ${companyPhone}`, companyInfoX, 50);
       
       doc.line(105, 22, 105, 55); // Vertical divider
       
