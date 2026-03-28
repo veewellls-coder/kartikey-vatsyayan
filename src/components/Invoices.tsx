@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, FileText, CheckCircle, Clock, Download, Printer, X, ChevronRight, FileSpreadsheet, Upload, Trash2, Edit2, Calendar, Eye, Building2 } from 'lucide-react';
+import { Plus, Search, FileText, CheckCircle, Clock, Download, Printer, X, ChevronRight, FileSpreadsheet, Upload, Trash2, Edit2, Calendar, Eye, Building2, CreditCard } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Invoice, Client, CourierEntry } from '../types';
@@ -63,6 +63,10 @@ export default function Invoices() {
   const [companySettings, setCompanySettings] = useState<any>(null);
   const [filterParty, setFilterParty] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentInvoiceId, setPaymentInvoiceId] = useState<string | null>(null);
+  const [paymentDate, setPaymentDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [paymentMode, setPaymentMode] = useState('Cash');
 
   useEffect(() => {
     fetchInvoices();
@@ -90,6 +94,12 @@ export default function Invoices() {
   }, [selectedClientId]);
 
   async function handleStatusUpdate(invoiceId: string, newStatus: Invoice['status']) {
+    if (newStatus === 'paid') {
+      setPaymentInvoiceId(invoiceId);
+      setIsPaymentModalOpen(true);
+      return;
+    }
+
     try {
       const invoice = invoices.find(inv => inv.id === invoiceId);
       if (!invoice) return;
@@ -103,6 +113,31 @@ export default function Invoices() {
         inv.id === invoiceId ? { ...inv, status: newStatus } : inv
       ));
       toast.success(`Invoice status updated to ${newStatus}`);
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast.error('Failed to update status');
+    }
+  }
+
+  async function handleConfirmPayment() {
+    if (!paymentInvoiceId) return;
+    try {
+      const invoice = invoices.find(inv => inv.id === paymentInvoiceId);
+      if (!invoice) return;
+      
+      await api.put(`/invoices/${paymentInvoiceId}`, {
+        ...invoice,
+        status: 'paid',
+        paymentDate,
+        paymentMode
+      });
+      
+      setInvoices(prev => prev.map(inv => 
+        inv.id === paymentInvoiceId ? { ...inv, status: 'paid', paymentDate, paymentMode } : inv
+      ));
+      toast.success('Invoice marked as paid and transaction recorded');
+      setIsPaymentModalOpen(false);
+      setPaymentInvoiceId(null);
     } catch (error) {
       console.error('Error updating status:', error);
       toast.error('Failed to update status');
@@ -146,7 +181,9 @@ export default function Invoices() {
         await api.put(`/invoices/${editingInvoice.id}`, {
           invoiceNo,
           date: invoiceDate,
-          status: invoiceStatus
+          status: invoiceStatus,
+          paymentDate: invoiceStatus === 'paid' ? paymentDate : undefined,
+          paymentMode: invoiceStatus === 'paid' ? paymentMode : undefined
         });
         setIsModalOpen(false);
         setEditingInvoice(null);
@@ -178,6 +215,9 @@ export default function Invoices() {
         subtotal,
         gstTotal,
         grandTotal,
+        status: invoiceStatus,
+        paymentDate: invoiceStatus === 'paid' ? paymentDate : undefined,
+        paymentMode: invoiceStatus === 'paid' ? paymentMode : undefined,
         entryIds: selectedEntryIds
       });
 
@@ -213,6 +253,8 @@ export default function Invoices() {
     setInvoiceNo(invoice.invoiceNo);
     setInvoiceDate(format(new Date(invoice.date), 'yyyy-MM-dd'));
     setInvoiceStatus(invoice.status);
+    setPaymentDate(invoice.paymentDate || format(new Date(), 'yyyy-MM-dd'));
+    setPaymentMode(invoice.paymentMode || 'Cash');
     setSelectedClientId(invoice.clientId);
     setIsModalOpen(true);
   };
@@ -222,6 +264,8 @@ export default function Invoices() {
     setInvoiceNo('');
     setInvoiceDate(format(new Date(), 'yyyy-MM-dd'));
     setInvoiceStatus('unpaid');
+    setPaymentDate(format(new Date(), 'yyyy-MM-dd'));
+    setPaymentMode('Cash');
     setSelectedClientId('');
     setSelectedEntryIds([]);
     setIsModalOpen(true);
@@ -553,7 +597,9 @@ export default function Invoices() {
       'Subtotal': inv.subtotal,
       'GST': inv.gstTotal,
       'Total': inv.grandTotal,
-      'Status': inv.status
+      'Status': inv.status,
+      'Payment Date': inv.paymentDate || '-',
+      'Payment Mode': inv.paymentMode || '-'
     }));
     
     const ws = XLSX.utils.json_to_sheet(data);
@@ -708,6 +754,18 @@ export default function Invoices() {
                 <p className="text-xs font-bold text-slate-400 uppercase">Invoice #{invoice.invoiceNo}</p>
                 <h3 className="text-lg font-bold text-slate-900 mt-1">{invoice.clientName}</h3>
                 <p className="text-sm text-slate-500">{format(new Date(invoice.date), 'MMMM dd, yyyy')}</p>
+                {invoice.status === 'paid' && invoice.paymentDate && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-bold uppercase flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Paid on {format(new Date(invoice.paymentDate), 'dd MMM yyyy')}
+                    </div>
+                    <div className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-bold uppercase flex items-center gap-1">
+                      <CreditCard className="w-3 h-3" />
+                      {invoice.paymentMode}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
@@ -853,22 +911,53 @@ export default function Invoices() {
                         {clients.filter(c => c.id !== 'CASH').map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                       </select>
                     </div>
-                    {editingInvoice && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Status</label>
+                      <select 
+                        required
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                        value={invoiceStatus}
+                        onChange={(e) => setInvoiceStatus(e.target.value as Invoice['status'])}
+                      >
+                        <option value="unpaid">Unpaid</option>
+                        <option value="partially paid">Partially Paid</option>
+                        <option value="paid">Paid</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {invoiceStatus === 'paid' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-emerald-50 rounded-2xl border border-emerald-100">
                       <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Status</label>
+                        <label className="block text-xs font-bold text-emerald-700 uppercase mb-2">Payment Date</label>
+                        <div className="relative">
+                          <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-emerald-400" />
+                          <input 
+                            type="date" 
+                            className="w-full pl-12 pr-4 py-3 bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium"
+                            value={paymentDate}
+                            onChange={(e) => setPaymentDate(e.target.value)}
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-emerald-700 uppercase mb-2">Payment Mode</label>
                         <select 
+                          className="w-full px-4 py-3 bg-white border border-emerald-200 rounded-xl focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium"
+                          value={paymentMode}
+                          onChange={(e) => setPaymentMode(e.target.value)}
                           required
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                          value={invoiceStatus}
-                          onChange={(e) => setInvoiceStatus(e.target.value as Invoice['status'])}
                         >
-                          <option value="unpaid">Unpaid</option>
-                          <option value="partially paid">Partially Paid</option>
-                          <option value="paid">Paid</option>
+                          <option value="Cash">Cash</option>
+                          <option value="Bank Transfer">Bank Transfer</option>
+                          <option value="Cheque">Cheque</option>
+                          <option value="UPI">UPI</option>
+                          <option value="Other">Other</option>
                         </select>
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
                   {!editingInvoice && selectedClientId && (
                     <div className="space-y-4">
@@ -1014,6 +1103,80 @@ export default function Invoices() {
           </div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {isPaymentModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-600 text-white">
+                <h3 className="text-xl font-bold">Record Payment</h3>
+                <button 
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Payment Date</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                    <input 
+                      type="date" 
+                      className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
+                      value={paymentDate}
+                      onChange={(e) => setPaymentDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Payment Mode</label>
+                  <select 
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
+                    value={paymentMode}
+                    onChange={(e) => setPaymentMode(e.target.value)}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div className="bg-indigo-50 p-4 rounded-2xl">
+                  <p className="text-sm text-indigo-700 leading-relaxed">
+                    Recording this payment will mark the invoice as <strong>Paid</strong> and add a receipt entry to the client's ledger.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-6 bg-slate-50 flex gap-3">
+                <button 
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  className="flex-1 px-6 py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl hover:bg-slate-50 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleConfirmPayment}
+                  className="flex-1 px-6 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200"
+                >
+                  Confirm Payment
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <ConfirmationModal
         isOpen={isDeleteModalOpen}
         onClose={() => setIsDeleteModalOpen(false)}

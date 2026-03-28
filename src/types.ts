@@ -39,6 +39,8 @@ export interface Invoice {
   gstTotal: number;
   grandTotal: number;
   status: 'unpaid' | 'paid' | 'partially paid';
+  paymentDate?: string;
+  paymentMode?: string;
   entryIds: string[];
 }
 
@@ -49,5 +51,6 @@ export interface LedgerTransaction {
   type: 'sale' | 'purchase' | 'payment' | 'receipt';
   amount: number;
   description: string;
+  paymentMode?: string;
   referenceId?: string;
 }

@@ -27,10 +27,13 @@ db.exec(`
 `);
 
 try {
-  db.exec('ALTER TABLE clients ADD COLUMN state TEXT');
-} catch (e) {
-  // Column already exists
-}
+  db.exec('ALTER TABLE invoices ADD COLUMN paymentDate TEXT');
+  db.exec('ALTER TABLE invoices ADD COLUMN paymentMode TEXT');
+} catch (e) {}
+
+try {
+  db.exec('ALTER TABLE ledger_transactions ADD COLUMN paymentMode TEXT');
+} catch (e) {}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS courier_entries (
@@ -65,6 +68,8 @@ db.exec(`
     gstTotal REAL,
     grandTotal REAL,
     status TEXT DEFAULT 'unpaid',
+    paymentDate TEXT,
+    paymentMode TEXT,
     createdAt TEXT,
     FOREIGN KEY (clientId) REFERENCES clients(id)
   );
@@ -84,6 +89,7 @@ db.exec(`
     type TEXT NOT NULL,
     amount REAL NOT NULL,
     description TEXT,
+    paymentMode TEXT,
     referenceId TEXT,
     createdAt TEXT,
     FOREIGN KEY (clientId) REFERENCES clients(id)
@@ -330,17 +336,21 @@ async function startServer() {
     const invoice = req.body;
     const id = Math.random().toString(36).substring(2, 15);
     const createdAt = new Date().toISOString();
+    const status = invoice.status || 'unpaid';
+    const paymentDate = status === 'paid' ? (invoice.paymentDate || invoice.date) : null;
+    const paymentMode = status === 'paid' ? (invoice.paymentMode || 'Cash') : null;
 
     const transaction = db.transaction(() => {
+      // Create invoice
       db.prepare(`
         INSERT INTO invoices (
           id, invoiceNo, date, clientId, clientName, clientGstin, 
-          subtotal, gstTotal, grandTotal, status, createdAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          subtotal, gstTotal, grandTotal, status, paymentDate, paymentMode, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id, invoice.invoiceNo, invoice.date, invoice.clientId, 
         invoice.clientName, invoice.clientGstin, invoice.subtotal, 
-        invoice.gstTotal, invoice.grandTotal, 'unpaid', createdAt
+        invoice.gstTotal, invoice.grandTotal, status, paymentDate, paymentMode, createdAt
       );
 
       // Update entries
@@ -351,6 +361,39 @@ async function startServer() {
         updateEntry.run(id, entryId);
         insertInvoiceEntry.run(id, entryId);
       }
+
+      // Add to ledger (invoice entry)
+      db.prepare(`
+        INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, referenceId, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        Math.random().toString(36).substring(2, 15),
+        invoice.clientId,
+        invoice.date,
+        'invoice',
+        invoice.grandTotal,
+        `Invoice #${invoice.invoiceNo}`,
+        id,
+        createdAt
+      );
+
+      // If paid, add receipt entry
+      if (status === 'paid') {
+        db.prepare(`
+          INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          Math.random().toString(36).substring(2, 15),
+          invoice.clientId,
+          paymentDate,
+          'receipt',
+          invoice.grandTotal,
+          `Payment received for Invoice: ${invoice.invoiceNo}`,
+          paymentMode,
+          id,
+          createdAt
+        );
+      }
     });
 
     transaction();
@@ -359,12 +402,48 @@ async function startServer() {
 
   app.put('/api/invoices/:id', (req, res) => {
     const { id } = req.params;
-    const { invoiceNo, date, status } = req.body;
+    const { invoiceNo, date, status, paymentDate, paymentMode } = req.body;
+    const createdAt = new Date().toISOString();
     
-    db.prepare('UPDATE invoices SET invoiceNo = ?, date = ?, status = ? WHERE id = ?')
-      .run(invoiceNo, date, status, id);
-    
-    res.json({ id, invoiceNo, date, status });
+    const transaction = db.transaction(() => {
+      // Get current invoice to check status change
+      const currentInvoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+      if (!currentInvoice) throw new Error('Invoice not found');
+
+      // Update invoice
+      db.prepare(`
+        UPDATE invoices 
+        SET invoiceNo = ?, date = ?, status = ?, paymentDate = ?, paymentMode = ? 
+        WHERE id = ?
+      `).run(invoiceNo || currentInvoice.invoiceNo, date || currentInvoice.date, status, paymentDate, paymentMode, id);
+
+      // If status changed to 'paid', create a receipt transaction in ledger
+      if (status === 'paid' && currentInvoice.status !== 'paid') {
+        const ledgerId = Math.random().toString(36).substring(2, 15);
+        db.prepare(`
+          INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          ledgerId, 
+          currentInvoice.clientId, 
+          paymentDate || new Date().toISOString().split('T')[0], 
+          'receipt', 
+          currentInvoice.grandTotal, 
+          `Payment received for Invoice: ${currentInvoice.invoiceNo}`, 
+          paymentMode, 
+          id, 
+          createdAt
+        );
+      }
+    });
+
+    try {
+      transaction();
+      res.json({ id, invoiceNo, date, status, paymentDate, paymentMode });
+    } catch (error: any) {
+      console.error('Error updating invoice:', error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.delete('/api/invoices/:id', (req, res) => {

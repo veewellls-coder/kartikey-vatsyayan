@@ -20,6 +20,7 @@ export default function CourierEntries() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [filterParty, setFilterParty] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
+  const [filterDocket, setFilterDocket] = useState('');
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importData, setImportData] = useState<any[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -314,7 +315,8 @@ export default function CourierEntries() {
   const filteredEntries = entries.filter(entry => {
     const matchesParty = entry.clientName.toLowerCase().includes(filterParty.toLowerCase());
     const matchesMonth = filterMonth === '' || format(new Date(entry.date), 'yyyy-MM') === filterMonth;
-    return matchesParty && matchesMonth;
+    const matchesDocket = entry.docketNo.toLowerCase().includes(filterDocket.toLowerCase());
+    return matchesParty && matchesMonth && matchesDocket;
   });
 
   return (
@@ -341,7 +343,7 @@ export default function CourierEntries() {
       </div>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input 
@@ -350,6 +352,16 @@ export default function CourierEntries() {
             className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
             value={filterParty}
             onChange={(e) => setFilterParty(e.target.value)}
+          />
+        </div>
+        <div className="relative">
+          <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+          <input 
+            type="text"
+            placeholder="Filter by Docket No..."
+            className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+            value={filterDocket}
+            onChange={(e) => setFilterDocket(e.target.value)}
           />
         </div>
         <div className="relative">
@@ -419,7 +431,7 @@ export default function CourierEntries() {
                       <Search className="w-8 h-8 text-slate-300" />
                       <p className="font-medium">No entries found matching your filters</p>
                       <button 
-                        onClick={() => { setFilterParty(''); setFilterMonth(''); }}
+                        onClick={() => { setFilterParty(''); setFilterMonth(''); setFilterDocket(''); }}
                         className="text-indigo-600 text-sm hover:underline"
                       >
                         Clear filters
