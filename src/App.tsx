@@ -143,6 +143,7 @@ function Sidebar({ isOpen, setIsOpen, logoUrl }: { isOpen: boolean; setIsOpen: (
 }
 
 export default function App() {
+  console.log('App is rendering');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settings, setSettings] = useState<any>(null);
 

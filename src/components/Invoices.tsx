@@ -188,8 +188,10 @@ export default function Invoices() {
         setIsModalOpen(false);
         setEditingInvoice(null);
         fetchInvoices();
-      } catch (error) {
+        toast.success('Invoice updated successfully');
+      } catch (error: any) {
         console.error('Error updating invoice:', error);
+        toast.error(error.message || 'Error updating invoice');
       }
       return;
     }
@@ -226,8 +228,10 @@ export default function Invoices() {
       setSelectedEntryIds([]);
       setInvoiceNo('');
       fetchInvoices();
-    } catch (error) {
+      toast.success('Invoice created successfully');
+    } catch (error: any) {
       console.error('Error creating invoice:', error);
+      toast.error(error.message || 'Error creating invoice');
     }
   }
 
@@ -259,7 +263,7 @@ export default function Invoices() {
     setIsModalOpen(true);
   };
 
-  const openCreateModal = () => {
+  const openCreateModal = async () => {
     setEditingInvoice(null);
     setInvoiceNo('');
     setInvoiceDate(format(new Date(), 'yyyy-MM-dd'));
@@ -269,6 +273,32 @@ export default function Invoices() {
     setSelectedClientId('');
     setSelectedEntryIds([]);
     setIsModalOpen(true);
+
+    try {
+      // Ensure settings are loaded or use empty string
+      let prefix = companySettings?.invoice_prefix;
+      let suffix = companySettings?.invoice_suffix;
+      if (prefix === undefined || suffix === undefined) {
+        const settings = await api.get('/settings');
+        setCompanySettings(settings);
+        prefix = settings.invoice_prefix || '';
+        suffix = settings.invoice_suffix || '';
+      }
+      
+      const { nextNumber } = await api.get(`/invoices/next-number?prefix=${encodeURIComponent(prefix || '')}&suffix=${encodeURIComponent(suffix || '')}`);
+      if (nextNumber) {
+        setInvoiceNo(nextNumber);
+      } else {
+        // Fallback if API returns nothing
+        setInvoiceNo((prefix || '') + '0001' + (suffix || ''));
+      }
+    } catch (error) {
+      console.error('Error fetching next invoice number:', error);
+      // Fallback on error
+      const fallbackPrefix = companySettings?.invoice_prefix || '';
+      const fallbackSuffix = companySettings?.invoice_suffix || '';
+      setInvoiceNo(fallbackPrefix + '0001' + fallbackSuffix);
+    }
   };
 
   const toggleEntrySelection = (id: string) => {
@@ -904,7 +934,10 @@ export default function Invoices() {
                         disabled={!!editingInvoice}
                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 disabled:opacity-50"
                         value={selectedClientId}
-                        onChange={(e) => setSelectedClientId(e.target.value)}
+                        onChange={(e) => {
+                          setSelectedClientId(e.target.value);
+                          setSelectedEntryIds([]);
+                        }}
                       >
                         <option value="">-- Select Client --</option>
                         <option value="CASH">Cash</option>
@@ -970,7 +1003,32 @@ export default function Invoices() {
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="bg-slate-100/50 border-b border-slate-200">
-                              <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Select</th>
+                              <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (selectedEntryIds.length === unbilledEntries.length) {
+                                        setSelectedEntryIds([]);
+                                      } else {
+                                        setSelectedEntryIds(unbilledEntries.map(e => e.id));
+                                      }
+                                    }}
+                                    className={cn(
+                                      "w-5 h-5 rounded border flex items-center justify-center transition-all",
+                                      selectedEntryIds.length === unbilledEntries.length && unbilledEntries.length > 0
+                                        ? "bg-indigo-600 border-indigo-600" 
+                                        : "bg-white border-slate-300"
+                                    )}
+                                  >
+                                    {selectedEntryIds.length === unbilledEntries.length && unbilledEntries.length > 0 && (
+                                      <CheckCircle className="w-3 h-3 text-white" />
+                                    )}
+                                  </button>
+                                  <span>Select</span>
+                                </div>
+                              </th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Date</th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Docket No</th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Destination</th>

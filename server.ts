@@ -9,119 +9,145 @@ import bodyParser from 'body-parser';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+console.log('--- Server Starting ---');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
 // Initialize SQLite Database
-const db = new Database('courier_erp.db');
-
-// Create Tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS clients (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    gstin TEXT,
-    address TEXT,
-    phone TEXT,
-    email TEXT,
-    state TEXT,
-    createdAt TEXT
-  );
-`);
-
+let db: Database.Database;
 try {
-  db.exec('ALTER TABLE invoices ADD COLUMN paymentDate TEXT');
-  db.exec('ALTER TABLE invoices ADD COLUMN paymentMode TEXT');
-} catch (e) {}
-
-try {
-  db.exec('ALTER TABLE ledger_transactions ADD COLUMN paymentMode TEXT');
-} catch (e) {}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS courier_entries (
-    id TEXT PRIMARY KEY,
-    sNo TEXT,
-    date TEXT NOT NULL,
-    clientId TEXT NOT NULL,
-    clientName TEXT,
-    courierName TEXT,
-    docketNo TEXT NOT NULL,
-    weight REAL,
-    destination TEXT,
-    vWeight REAL,
-    mode TEXT,
-    comments TEXT,
-    amount REAL,
-    gstRate REAL,
-    totalAmount REAL,
-    invoiceId TEXT,
-    createdAt TEXT,
-    FOREIGN KEY (clientId) REFERENCES clients(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS invoices (
-    id TEXT PRIMARY KEY,
-    invoiceNo TEXT NOT NULL,
-    date TEXT NOT NULL,
-    clientId TEXT NOT NULL,
-    clientName TEXT,
-    clientGstin TEXT,
-    subtotal REAL,
-    gstTotal REAL,
-    grandTotal REAL,
-    status TEXT DEFAULT 'unpaid',
-    paymentDate TEXT,
-    paymentMode TEXT,
-    createdAt TEXT,
-    FOREIGN KEY (clientId) REFERENCES clients(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS invoice_entries (
-    invoiceId TEXT,
-    entryId TEXT,
-    PRIMARY KEY (invoiceId, entryId),
-    FOREIGN KEY (invoiceId) REFERENCES invoices(id),
-    FOREIGN KEY (entryId) REFERENCES courier_entries(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS ledger_transactions (
-    id TEXT PRIMARY KEY,
-    clientId TEXT NOT NULL,
-    date TEXT NOT NULL,
-    type TEXT NOT NULL,
-    amount REAL NOT NULL,
-    description TEXT,
-    paymentMode TEXT,
-    referenceId TEXT,
-    createdAt TEXT,
-    FOREIGN KEY (clientId) REFERENCES clients(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT
-  );
-
-  -- Initialize default settings
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_name', 'SPEEDX EXTERPRISES');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_address', '123, Business Park, Sector 45\nNew Delhi - 110001');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_gstin', '07AAAAA0000A1Z5');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_phone', '+91 98765 43210');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_email', 'contact@speedx.com');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('company_state', 'Uttar Pradesh');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_name', '');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account', '');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_ifsc', '');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_branch', '');
-
-  -- Initialize default 'Cash' client
-  INSERT OR IGNORE INTO clients (id, name, createdAt) VALUES ('CASH', 'Cash', '2024-01-01T00:00:00.000Z');
-`);
+  db = new Database('courier_erp.db');
+  console.log('Database initialized successfully.');
+} catch (dbError) {
+  console.error('CRITICAL: Database initialization failed:', dbError);
+  // Fallback or exit?
+  process.exit(1);
+}
 
 async function startServer() {
+  console.log('--- startServer called ---');
   const app = express();
   const PORT = 3000;
 
+  try {
+    console.log('Initializing database tables...');
+    // Create Tables
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS clients (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        gstin TEXT,
+        address TEXT,
+        phone TEXT,
+        email TEXT,
+        state TEXT,
+        createdAt TEXT
+      );
+    `);
+
+    try {
+      db.exec('ALTER TABLE invoices ADD COLUMN paymentDate TEXT');
+      db.exec('ALTER TABLE invoices ADD COLUMN paymentMode TEXT');
+    } catch (e) {}
+
+    try {
+      db.exec('ALTER TABLE ledger_transactions ADD COLUMN paymentMode TEXT');
+    } catch (e) {}
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS courier_entries (
+        id TEXT PRIMARY KEY,
+        sNo TEXT,
+        date TEXT NOT NULL,
+        clientId TEXT NOT NULL,
+        clientName TEXT,
+        courierName TEXT,
+        docketNo TEXT NOT NULL,
+        weight REAL,
+        destination TEXT,
+        vWeight REAL,
+        mode TEXT,
+        comments TEXT,
+        amount REAL,
+        gstRate REAL,
+        totalAmount REAL,
+        invoiceId TEXT,
+        createdAt TEXT,
+        FOREIGN KEY (clientId) REFERENCES clients(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS invoices (
+        id TEXT PRIMARY KEY,
+        invoiceNo TEXT NOT NULL UNIQUE,
+        date TEXT NOT NULL,
+        clientId TEXT NOT NULL,
+        clientName TEXT,
+        clientGstin TEXT,
+        subtotal REAL,
+        gstTotal REAL,
+        grandTotal REAL,
+        status TEXT DEFAULT 'unpaid',
+        paymentDate TEXT,
+        paymentMode TEXT,
+        createdAt TEXT,
+        FOREIGN KEY (clientId) REFERENCES clients(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS invoice_entries (
+        invoiceId TEXT,
+        entryId TEXT,
+        PRIMARY KEY (invoiceId, entryId),
+        FOREIGN KEY (invoiceId) REFERENCES invoices(id),
+        FOREIGN KEY (entryId) REFERENCES courier_entries(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS ledger_transactions (
+        id TEXT PRIMARY KEY,
+        clientId TEXT NOT NULL,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        description TEXT,
+        paymentMode TEXT,
+        referenceId TEXT,
+        createdAt TEXT,
+        FOREIGN KEY (clientId) REFERENCES clients(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
+
+      -- Initialize default settings
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_name', 'SPEEDX EXTERPRISES');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_address', '123, Business Park, Sector 45\nNew Delhi - 110001');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_gstin', '07AAAAA0000A1Z5');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_phone', '+91 98765 43210');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_email', 'contact@speedx.com');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('company_state', 'Uttar Pradesh');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_name', '');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_account', '');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_ifsc', '');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('bank_branch', '');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('invoice_prefix', '');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('invoice_suffix', '');
+
+      -- Initialize default 'Cash' client
+      INSERT OR IGNORE INTO clients (id, name, createdAt) VALUES ('CASH', 'Cash', '2024-01-01T00:00:00.000Z');
+    `);
+    console.log('Database tables initialized.');
+  } catch (err) {
+    console.error('Database initialization error:', err);
+  }
+
   app.use(cors());
   app.use(bodyParser.json());
+
+  // Health check
+  app.get('/api/health', (req, res) => {
+    console.log('Health check requested.');
+    res.json({ status: 'ok' });
+  });
 
   // --- API Routes ---
 
@@ -332,8 +358,64 @@ async function startServer() {
     res.json({ ...invoice, entries });
   });
 
+  app.get('/api/invoices/next-number', (req, res) => {
+    try {
+      let { prefix, suffix } = req.query;
+      
+      // If prefix/suffix not provided in query, try to get them from settings
+      if (prefix === undefined) {
+        const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('invoice_prefix') as any;
+        prefix = setting ? setting.value : '';
+      }
+      if (suffix === undefined) {
+        const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('invoice_suffix') as any;
+        suffix = setting ? setting.value : '';
+      }
+
+      const invoices = db.prepare('SELECT invoiceNo FROM invoices').all() as any[];
+      
+      let maxNum = 0;
+      const searchPrefix = (prefix as string) || '';
+      const searchSuffix = (suffix as string) || '';
+      
+      for (const inv of invoices) {
+        const invNo = inv.invoiceNo || '';
+        if (invNo.startsWith(searchPrefix) && invNo.endsWith(searchSuffix)) {
+          const numericPart = invNo.substring(searchPrefix.length, invNo.length - searchSuffix.length);
+          // Extract only the numeric part
+          const match = numericPart.match(/^(\d+)/);
+          if (match) {
+            const num = parseInt(match[1]);
+            if (!isNaN(num) && num > maxNum) {
+              maxNum = num;
+            }
+          }
+        }
+      }
+      
+      const nextNumber = maxNum + 1;
+      const formattedNumber = nextNumber.toString().padStart(4, '0');
+      res.json({ 
+        nextNumber: searchPrefix + formattedNumber + searchSuffix,
+        prefix: searchPrefix,
+        suffix: searchSuffix,
+        sequence: nextNumber
+      });
+    } catch (error: any) {
+      console.error('Error generating next invoice number:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post('/api/invoices', (req, res) => {
     const invoice = req.body;
+    
+    // Check for duplicate invoice number
+    const existing = db.prepare('SELECT id FROM invoices WHERE invoiceNo = ?').get(invoice.invoiceNo);
+    if (existing) {
+      return res.status(400).json({ error: `Invoice number ${invoice.invoiceNo} already exists.` });
+    }
+
     const id = Math.random().toString(36).substring(2, 15);
     const createdAt = new Date().toISOString();
     const status = invoice.status || 'unpaid';
@@ -405,6 +487,14 @@ async function startServer() {
     const { invoiceNo, date, status, paymentDate, paymentMode } = req.body;
     const createdAt = new Date().toISOString();
     
+    // Check for duplicate invoice number if it's being changed
+    if (invoiceNo) {
+      const existing = db.prepare('SELECT id FROM invoices WHERE invoiceNo = ? AND id != ?').get(invoiceNo, id);
+      if (existing) {
+        return res.status(400).json({ error: `Invoice number ${invoiceNo} already exists.` });
+      }
+    }
+
     const transaction = db.transaction(() => {
       // Get current invoice to check status change
       const currentInvoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
@@ -623,11 +713,17 @@ async function startServer() {
   // --- Vite / Static Files ---
 
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+    console.log('Vite middleware is being attached...');
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+      console.log('Vite middleware attached successfully.');
+    } catch (viteError) {
+      console.error('Error creating Vite server:', viteError);
+    }
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));

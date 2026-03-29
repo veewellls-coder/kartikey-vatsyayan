@@ -13,6 +13,8 @@ export default function Settings() {
     company_email: '',
     company_state: 'Uttar Pradesh',
     logo_url: '',
+    invoice_prefix: '',
+    invoice_suffix: '',
     bank_name: '',
     bank_account: '',
     bank_ifsc: '',
@@ -303,6 +305,36 @@ export default function Settings() {
                   <option value="Lakshadweep">Lakshadweep</option>
                   <option value="Puducherry">Puducherry</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase mb-2">
+                  <Database className="w-4 h-4" />
+                  Invoice Prefix
+                </label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
+                  value={settings.invoice_prefix}
+                  onChange={(e) => setSettings({ ...settings, invoice_prefix: e.target.value })}
+                  placeholder="e.g. INV-"
+                />
+                <p className="text-[10px] text-slate-400 mt-1 italic">This prefix will be added to auto-generated invoice numbers.</p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase mb-2">
+                  <Database className="w-4 h-4" />
+                  Invoice Suffix
+                </label>
+                <input 
+                  type="text" 
+                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
+                  value={settings.invoice_suffix}
+                  onChange={(e) => setSettings({ ...settings, invoice_suffix: e.target.value })}
+                  placeholder="e.g. /2024"
+                />
+                <p className="text-[10px] text-slate-400 mt-1 italic">This suffix will be added to auto-generated invoice numbers.</p>
               </div>
             </div>
 
