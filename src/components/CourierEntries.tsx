@@ -388,6 +388,7 @@ export default function CourierEntries() {
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Docket</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Weight</th>
                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Destination</th>
+                <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Comments</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Total</th>
                 <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Actions</th>
               </tr>
@@ -403,6 +404,7 @@ export default function CourierEntries() {
                     <td className="px-6 py-4 text-sm font-mono text-indigo-600">{entry.docketNo}</td>
                     <td className="px-6 py-4 text-sm text-slate-600">{entry.weight}kg</td>
                     <td className="px-6 py-4 text-sm text-slate-600">{entry.destination}</td>
+                    <td className="px-6 py-4 text-sm text-slate-500 italic truncate max-w-[150px]">{entry.comments || '-'}</td>
                     <td className="px-6 py-4 text-sm font-bold text-slate-900">₹{entry.totalAmount.toFixed(2)}</td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -426,7 +428,7 @@ export default function CourierEntries() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-500">
                     <div className="flex flex-col items-center gap-2">
                       <Search className="w-8 h-8 text-slate-300" />
                       <p className="font-medium">No entries found matching your filters</p>

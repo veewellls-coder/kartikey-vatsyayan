@@ -48,7 +48,7 @@ export interface LedgerTransaction {
   id: string;
   clientId: string;
   date: string;
-  type: 'sale' | 'purchase' | 'payment' | 'receipt';
+  type: 'sale' | 'purchase' | 'payment' | 'receipt' | 'invoice';
   amount: number;
   description: string;
   paymentMode?: string;

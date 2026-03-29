@@ -278,11 +278,11 @@ export default function Invoices() {
       // Ensure settings are loaded or use empty string
       let prefix = companySettings?.invoice_prefix;
       let suffix = companySettings?.invoice_suffix;
-      if (prefix === undefined || suffix === undefined) {
+      if (prefix == null || suffix == null) {
         const settings = await api.get('/settings');
         setCompanySettings(settings);
-        prefix = settings.invoice_prefix || '';
-        suffix = settings.invoice_suffix || '';
+        prefix = settings.invoice_prefix ?? '';
+        suffix = settings.invoice_suffix ?? '';
       }
       
       const { nextNumber } = await api.get(`/invoices/next-number?prefix=${encodeURIComponent(prefix || '')}&suffix=${encodeURIComponent(suffix || '')}`);
@@ -450,9 +450,15 @@ export default function Invoices() {
       const tableData = details.entries.map((e: CourierEntry, index: number) => {
         const amount = isNaN(e.amount) ? 0 : e.amount;
         const weight = isNaN(e.weight) ? 0 : e.weight;
+        const description = [
+          `${e.date} | ${e.courierName} - ${e.docketNo}`,
+          `Dest: ${e.destination}`,
+          `Weight: ${weight}kg | Comments: ${e.comments || '-'}`
+        ].join('\n');
+
         return [
           index + 1,
-          `${e.date}\n${e.courierName} - ${e.docketNo}\nDest: ${e.destination}`,
+          description,
           '996812', // HSN/SAC Code for Courier
           weight || '-',
           'Nos',
@@ -1031,7 +1037,9 @@ export default function Invoices() {
                               </th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Date</th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Docket No</th>
+                              <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Weight</th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Destination</th>
+                              <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Comments</th>
                               <th className="px-6 py-3 text-xs font-bold text-slate-500 uppercase">Amount</th>
                             </tr>
                           </thead>
@@ -1055,13 +1063,15 @@ export default function Invoices() {
                                 </td>
                                 <td className="px-6 py-4 text-sm text-slate-600">{entry.date}</td>
                                 <td className="px-6 py-4 text-sm font-mono text-indigo-600">{entry.docketNo}</td>
+                                <td className="px-6 py-4 text-sm text-slate-600">{entry.weight}kg</td>
                                 <td className="px-6 py-4 text-sm text-slate-600">{entry.destination}</td>
+                                <td className="px-6 py-4 text-sm text-slate-500 italic">{entry.comments || '-'}</td>
                                 <td className="px-6 py-4 text-sm font-bold text-slate-900">₹{entry.totalAmount.toFixed(2)}</td>
                               </tr>
                             ))}
                             {unbilledEntries.length === 0 && (
                               <tr>
-                                <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                                <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                                   No unbilled entries found for this client.
                                 </td>
                               </tr>

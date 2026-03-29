@@ -3,7 +3,10 @@ const API_BASE = '/api';
 export const api = {
   async get(path: string) {
     const res = await fetch(`${API_BASE}${path}`);
-    if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || `API Error: ${res.statusText}`);
+    }
     return res.json();
   },
   async request(path: string, method: string, data?: any) {

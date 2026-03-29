@@ -362,6 +362,10 @@ async function startServer() {
     try {
       let { prefix, suffix } = req.query;
       
+      // Ensure prefix and suffix are strings
+      if (Array.isArray(prefix)) prefix = prefix[0];
+      if (Array.isArray(suffix)) suffix = suffix[0];
+      
       // If prefix/suffix not provided in query, try to get them from settings
       if (prefix === undefined) {
         const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('invoice_prefix') as any;
@@ -375,26 +379,37 @@ async function startServer() {
       const invoices = db.prepare('SELECT invoiceNo FROM invoices').all() as any[];
       
       let maxNum = 0;
+      let paddingLength = 4;
       const searchPrefix = (prefix as string) || '';
       const searchSuffix = (suffix as string) || '';
       
       for (const inv of invoices) {
         const invNo = inv.invoiceNo || '';
-        if (invNo.startsWith(searchPrefix) && invNo.endsWith(searchSuffix)) {
+        const lowerInvNo = invNo.toLowerCase();
+        const lowerPrefix = searchPrefix.toLowerCase();
+        const lowerSuffix = searchSuffix.toLowerCase();
+
+        if (lowerInvNo.startsWith(lowerPrefix) && lowerInvNo.endsWith(lowerSuffix)) {
           const numericPart = invNo.substring(searchPrefix.length, invNo.length - searchSuffix.length);
-          // Extract only the numeric part
-          const match = numericPart.match(/^(\d+)/);
-          if (match) {
-            const num = parseInt(match[1]);
+          // Extract the last sequence of digits in the numeric part
+          const matches = numericPart.match(/(\d+)/g);
+          if (matches && matches.length > 0) {
+            const lastMatch = matches[matches.length - 1];
+            const num = parseInt(lastMatch);
             if (!isNaN(num) && num > maxNum) {
               maxNum = num;
+              // Keep track of the padding length of the largest number found
+              if (lastMatch.length > paddingLength) {
+                paddingLength = lastMatch.length;
+              }
             }
           }
         }
       }
       
       const nextNumber = maxNum + 1;
-      const formattedNumber = nextNumber.toString().padStart(4, '0');
+      const finalPadding = Math.max(paddingLength, 4);
+      const formattedNumber = nextNumber.toString().padStart(finalPadding, '0');
       res.json({ 
         nextNumber: searchPrefix + formattedNumber + searchSuffix,
         prefix: searchPrefix,
@@ -403,7 +418,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Error generating next invoice number:', error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error.message || String(error) });
     }
   });
 
@@ -598,6 +613,23 @@ async function startServer() {
     res.json(transactions);
   });
 
+  app.post('/api/ledger', (req, res) => {
+    const { clientId, date, type, amount, description, paymentMode, referenceId } = req.body;
+    const id = Math.random().toString(36).substring(2, 15);
+    const createdAt = new Date().toISOString();
+
+    try {
+      db.prepare(`
+        INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt);
+      
+      res.json({ id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Dashboard Stats
   app.get('/api/stats', (req, res) => {
     const totalClients = db.prepare('SELECT COUNT(*) as count FROM clients').get().count;
@@ -694,11 +726,11 @@ async function startServer() {
 
         // Restore Ledger
         const insertLedger = db.prepare(`
-          INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, referenceId, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const l of backup.ledger) {
-          insertLedger.run(l.id, l.clientId, l.date, l.type, l.amount, l.description, l.referenceId, l.createdAt);
+          insertLedger.run(l.id, l.clientId, l.date, l.type, l.amount, l.description, l.paymentMode, l.referenceId, l.createdAt);
         }
       });
 
