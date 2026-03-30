@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
 import bodyParser from 'body-parser';
@@ -141,12 +142,62 @@ async function startServer() {
   }
 
   app.use(cors());
-  app.use(bodyParser.json());
+
+  // DB Upload must be before global body parsers to handle raw binary data correctly
+  app.post('/api/db-upload', express.raw({ type: 'application/octet-stream', limit: '100mb' }), (req, res) => {
+    console.log('DB upload request received. Body size:', req.body?.length);
+    try {
+      const dbPath = path.join(process.cwd(), 'courier_erp.db');
+      const backupPath = path.join(process.cwd(), `courier_erp_backup_${Date.now()}.db`);
+
+      if (!req.body || req.body.length === 0) {
+        throw new Error('Empty database file uploaded');
+      }
+
+      // 1. Close current connection
+      console.log('Closing database connection...');
+      try {
+        db.close();
+      } catch (closeError) {
+        console.warn('Warning: Database close failed (might already be closed):', closeError);
+      }
+
+      // 2. Backup current file just in case
+      if (fs.existsSync(dbPath)) {
+        console.log('Creating backup of current database...');
+        fs.copyFileSync(dbPath, backupPath);
+      }
+
+      // 3. Write new file
+      console.log('Writing new database file...');
+      fs.writeFileSync(dbPath, req.body);
+
+      // 4. Re-open connection
+      console.log('Re-opening database connection...');
+      db = new Database('courier_erp.db');
+      
+      console.log('Database upload successful.');
+      res.json({ success: true, message: 'Database restored successfully' });
+    } catch (error: any) {
+      console.error('DB Upload error:', error);
+      // Try to re-open if it failed
+      try { db = new Database('courier_erp.db'); } catch (e) {}
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.use(bodyParser.json({ limit: '100mb' }));
+  app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 
   // Health check
   app.get('/api/health', (req, res) => {
-    console.log('Health check requested.');
-    res.json({ status: 'ok' });
+    try {
+      db.prepare('SELECT 1').get();
+      res.json({ status: 'ok', database: 'connected' });
+    } catch (error: any) {
+      console.error('Health check failed:', error);
+      res.status(500).json({ status: 'error', message: error.message });
+    }
   });
 
   // --- API Routes ---
@@ -659,16 +710,29 @@ async function startServer() {
     }
   });
 
+  app.get('/api/db-download', (req, res) => {
+    const dbPath = path.join(process.cwd(), 'courier_erp.db');
+    if (fs.existsSync(dbPath)) {
+      res.download(dbPath, 'courier_erp.db');
+    } else {
+      res.status(404).json({ error: 'Database file not found' });
+    }
+  });
+
   app.post('/api/restore', (req, res) => {
     const backup = req.body;
+    console.log('Restore request received. Backup version:', backup.version);
     
-    if (!backup.clients || !backup.entries || !backup.settings) {
+    if (!backup.clients || !backup.entries) {
+      console.error('Invalid backup format: missing clients or entries');
       return res.status(400).json({ error: 'Invalid backup file format' });
     }
 
     try {
+      console.log('Starting restore transaction...');
       const transaction = db.transaction(() => {
         // Clear all tables
+        console.log('Clearing existing tables...');
         db.prepare('DELETE FROM invoice_entries').run();
         db.prepare('DELETE FROM ledger_transactions').run();
         db.prepare('DELETE FROM courier_entries').run();
@@ -677,18 +741,23 @@ async function startServer() {
         db.prepare('DELETE FROM settings').run();
 
         // Restore Settings
-        const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
-        for (const s of backup.settings) {
-          insertSetting.run(s.key, s.value);
+        if (backup.settings) {
+          console.log('Restoring settings...');
+          const insertSetting = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+          for (const s of backup.settings) {
+            insertSetting.run(s.key, s.value);
+          }
         }
 
         // Restore Clients
+        console.log('Restoring clients...');
         const insertClient = db.prepare('INSERT INTO clients (id, name, gstin, address, state, phone, email, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         for (const c of backup.clients) {
           insertClient.run(c.id, c.name, c.gstin, c.address, c.state, c.phone, c.email, c.createdAt);
         }
 
         // Restore Entries
+        console.log('Restoring entries...');
         const insertEntry = db.prepare(`
           INSERT INTO courier_entries (
             id, sNo, date, clientId, clientName, courierName, docketNo, 
@@ -705,36 +774,46 @@ async function startServer() {
         }
 
         // Restore Invoices
-        const insertInvoice = db.prepare(`
-          INSERT INTO invoices (
-            id, invoiceNo, date, clientId, clientName, clientGstin, 
-            subtotal, gstTotal, grandTotal, status, createdAt
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const i of backup.invoices) {
-          insertInvoice.run(
-            i.id, i.invoiceNo, i.date, i.clientId, i.clientName, i.clientGstin,
-            i.subtotal, i.gstTotal, i.grandTotal, i.status, i.createdAt
-          );
+        if (backup.invoices) {
+          console.log('Restoring invoices...');
+          const insertInvoice = db.prepare(`
+            INSERT INTO invoices (
+              id, invoiceNo, date, clientId, clientName, clientGstin, 
+              subtotal, gstTotal, grandTotal, status, paymentDate, paymentMode, createdAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const i of backup.invoices) {
+            insertInvoice.run(
+              i.id, i.invoiceNo, i.date, i.clientId, i.clientName, i.clientGstin,
+              i.subtotal, i.gstTotal, i.grandTotal, i.status, i.paymentDate, i.paymentMode, i.createdAt
+            );
+          }
         }
 
         // Restore Invoice Entries
-        const insertInvoiceEntry = db.prepare('INSERT INTO invoice_entries (invoiceId, entryId) VALUES (?, ?)');
-        for (const ie of backup.invoiceEntries) {
-          insertInvoiceEntry.run(ie.invoiceId, ie.entryId);
+        if (backup.invoiceEntries) {
+          console.log('Restoring invoice entries...');
+          const insertInvoiceEntry = db.prepare('INSERT INTO invoice_entries (invoiceId, entryId) VALUES (?, ?)');
+          for (const ie of backup.invoiceEntries) {
+            insertInvoiceEntry.run(ie.invoiceId, ie.entryId);
+          }
         }
 
         // Restore Ledger
-        const insertLedger = db.prepare(`
-          INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        for (const l of backup.ledger) {
-          insertLedger.run(l.id, l.clientId, l.date, l.type, l.amount, l.description, l.paymentMode, l.referenceId, l.createdAt);
+        if (backup.ledger) {
+          console.log('Restoring ledger...');
+          const insertLedger = db.prepare(`
+            INSERT INTO ledger_transactions (id, clientId, date, type, amount, description, paymentMode, referenceId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const l of backup.ledger) {
+            insertLedger.run(l.id, l.clientId, l.date, l.type, l.amount, l.description, l.paymentMode, l.referenceId, l.createdAt);
+          }
         }
       });
 
       transaction();
+      console.log('Restore transaction completed successfully.');
       res.json({ success: true });
     } catch (error: any) {
       console.error('Restore error:', error);
@@ -766,6 +845,20 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+  });
+
+  // Global error handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error('Unhandled Server Error:', err);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+  });
+
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   });
 }
 

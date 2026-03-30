@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, User, Phone, Mail, MapPin, CreditCard, Edit2, Trash2 } from 'lucide-react';
+import { GoogleGenAI, Type } from "@google/genai";
+import { Plus, Search, User, Phone, Mail, MapPin, CreditCard, Edit2, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Client } from '../types';
@@ -15,6 +16,10 @@ export default function Clients() {
   const [loading, setLoading] = useState(true);
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationStatus, setVerificationStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [verifiedDetails, setVerifiedDetails] = useState<{legalName?: string, tradeName?: string, address?: string} | null>(null);
+  
   const initialClientState = {
     name: '',
     gstin: '',
@@ -22,6 +27,138 @@ export default function Clients() {
     state: 'Uttar Pradesh',
     phone: '',
     email: ''
+  };
+
+  const stateCodes: Record<string, string> = {
+    "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh",
+    "05": "Uttarakhand", "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh",
+    "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur",
+    "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal",
+    "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+    "27": "Maharashtra", "28": "Andhra Pradesh", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep",
+    "32": "Kerala", "33": "Tamil Nadu", "34": "Puducherry", "35": "Andaman and Nicobar Islands",
+    "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh"
+  };
+
+  const verifyGstin = async (gstin: string) => {
+    if (gstin.length !== 15) return;
+    
+    // Basic typo correction: replace 'O' with '0' if it's in a numeric position
+    // GSTIN format: 2 digits, 5 chars, 4 digits, 1 char, 1 digit/char, 'Z', 1 digit/char
+    let correctedGstin = gstin.toUpperCase();
+    if (correctedGstin.includes('O')) {
+      // Simple heuristic: if 'O' is in the numeric segments, it's likely a '0'
+      const parts = correctedGstin.split('');
+      // First 2 digits
+      if (parts[0] === 'O') parts[0] = '0';
+      if (parts[1] === 'O') parts[1] = '0';
+      // 4 digits in PAN (pos 7-10)
+      for (let i = 7; i <= 10; i++) {
+        if (parts[i] === 'O') parts[i] = '0';
+      }
+      // 13th char (entity number)
+      if (parts[12] === 'O') parts[12] = '0';
+      // 15th char (check digit)
+      if (parts[14] === 'O') parts[14] = '0';
+      
+      correctedGstin = parts.join('');
+      if (correctedGstin !== gstin.toUpperCase()) {
+        toast.info(`Corrected GSTIN from ${gstin} to ${correctedGstin}`);
+        setNewClient(prev => ({ ...prev, gstin: correctedGstin }));
+      }
+    }
+
+    setIsVerifying(true);
+    setVerificationStatus('idle');
+    setVerifiedDetails(null);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Search for the legal name, trade name, address, and state for GSTIN: ${correctedGstin}. 
+        Also search for the company name associated with PAN: ${correctedGstin.substring(2, 12)}.
+        Return the result as a JSON object with fields: legalName, tradeName, address, state. 
+        If specific details are not found, try to infer the state from the GSTIN prefix (${correctedGstin.substring(0, 2)}) and return at least the state.
+        If no reliable information is found at all, return an error message explaining why.`,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              legalName: { type: Type.STRING },
+              tradeName: { type: Type.STRING },
+              address: { type: Type.STRING },
+              state: { type: Type.STRING },
+              error: { type: Type.STRING }
+            }
+          }
+        },
+      });
+
+      const result = JSON.parse(response.text || '{}');
+      setVerifiedDetails(result);
+      
+      if (result.error && !result.legalName && !result.tradeName) {
+        // Fallback: extract state from GSTIN prefix even if search fails
+        const stateCode = correctedGstin.substring(0, 2);
+        const fallbackState = stateCodes[stateCode];
+        if (fallbackState) {
+          setNewClient(prev => ({ ...prev, state: fallbackState }));
+          setVerificationStatus('success');
+          toast.info(`Could not find full details, but identified state as ${fallbackState}`);
+          return;
+        }
+        throw new Error(result.error);
+      }
+
+      if (result.legalName || result.tradeName) {
+        setNewClient(prev => ({
+          ...prev,
+          name: result.legalName || result.tradeName || prev.name,
+          address: result.address || prev.address,
+          state: result.state || prev.state || stateCodes[correctedGstin.substring(0, 2)] || prev.state
+        }));
+        setVerificationStatus('success');
+        toast.success('GSTIN verified successfully');
+      } else {
+        // Fallback state extraction
+        const stateCode = correctedGstin.substring(0, 2);
+        const fallbackState = stateCodes[stateCode];
+        if (fallbackState) {
+          setNewClient(prev => ({ ...prev, state: fallbackState }));
+          setVerificationStatus('success');
+          toast.info(`Identified state as ${fallbackState} from GSTIN prefix`);
+        } else {
+          setVerificationStatus('error');
+          toast.error('Could not find details for this GSTIN');
+        }
+      }
+    } catch (error: any) {
+      console.error('GSTIN verification failed:', error);
+      
+      // Final fallback: try to get state from prefix even on total failure
+      const stateCode = correctedGstin.substring(0, 2);
+      const fallbackState = stateCodes[stateCode];
+      if (fallbackState) {
+        setNewClient(prev => ({ ...prev, state: fallbackState }));
+        setVerificationStatus('success');
+        toast.info(`Verification failed, but identified state as ${fallbackState}`);
+      } else {
+        setVerificationStatus('error');
+        toast.error(error.message || 'Failed to verify GSTIN. Please enter details manually.');
+      }
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleGstinChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value.toUpperCase();
+    setNewClient({ ...newClient, gstin: value });
+    if (value.length === 15) {
+      verifyGstin(value);
+    }
   };
 
   const indianStates = [
@@ -93,12 +230,16 @@ export default function Clients() {
       phone: client.phone || '',
       email: client.email || ''
     });
+    setVerificationStatus('idle');
+    setVerifiedDetails(null);
     setIsModalOpen(true);
   }
 
   function openAddModal() {
     setEditingClientId(null);
     setNewClient(initialClientState);
+    setVerificationStatus('idle');
+    setVerifiedDetails(null);
     setIsModalOpen(true);
   }
 
@@ -223,22 +364,64 @@ export default function Clients() {
 
                 <form onSubmit={handleAddClient} className="space-y-5">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">Client Name *</label>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">GSTIN</label>
+                    <div className="relative">
+                      <input 
+                        type="text" 
+                        maxLength={15}
+                        placeholder="e.g. 07AAAAA0000A1Z5"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all uppercase"
+                        value={newClient.gstin}
+                        onChange={handleGstinChange}
+                      />
+                      {isVerifying && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                          <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                        </div>
+                      )}
+                      {!isVerifying && verificationStatus === 'success' && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500">
+                          <CheckCircle2 className="w-5 h-5" />
+                        </div>
+                      )}
+                      {!isVerifying && verificationStatus === 'error' && (
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-red-500">
+                          <AlertCircle className="w-5 h-5" />
+                        </div>
+                      )}
+                    </div>
+                    {!isVerifying && verificationStatus === 'success' && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-xl"
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Verified Details</span>
+                        </div>
+                        <p className="text-sm font-bold text-slate-900 leading-tight">
+                          {verifiedDetails?.legalName || verifiedDetails?.tradeName || newClient.name}
+                        </p>
+                        {verifiedDetails?.tradeName && verifiedDetails?.legalName && verifiedDetails.tradeName !== verifiedDetails.legalName && (
+                          <p className="text-[10px] text-slate-500 mt-0.5 uppercase tracking-tight">Trade Name: {verifiedDetails.tradeName}</p>
+                        )}
+                        {(verifiedDetails?.address || newClient.address) && (
+                          <p className="text-xs text-slate-500 mt-1 line-clamp-2 italic">
+                            {verifiedDetails?.address || newClient.address}
+                          </p>
+                        )}
+                      </motion.div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Client Name (Company Name) *</label>
                     <input 
                       required
                       type="text" 
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
                       value={newClient.name}
                       onChange={(e) => setNewClient({ ...newClient, name: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">GSTIN</label>
-                    <input 
-                      type="text" 
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
-                      value={newClient.gstin}
-                      onChange={(e) => setNewClient({ ...newClient, gstin: e.target.value })}
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">

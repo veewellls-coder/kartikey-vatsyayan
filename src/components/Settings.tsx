@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Settings as SettingsIcon, Save, Building2, MapPin, Phone, Mail, CreditCard, Download, Upload, Database, AlertTriangle } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Building2, MapPin, Phone, Mail, CreditCard, Download, Upload, Database, AlertTriangle, RefreshCw } from 'lucide-react';
 import { motion } from 'motion/react';
 import { api } from '../lib/api';
 import { toast } from 'sonner';
@@ -26,8 +26,12 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [dbBackingUp, setDbBackingUp] = useState(false);
+  const [dbRestoring, setDbRestoring] = useState(false);
+  const [showConfirmUpload, setShowConfirmUpload] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dbInputRef = useRef<HTMLInputElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -84,6 +88,22 @@ export default function Settings() {
     }
   }
 
+  const [dbStatus, setDbStatus] = useState<{ status: string; message: string } | null>(null);
+
+  useEffect(() => {
+    checkDbStatus();
+  }, []);
+
+  async function checkDbStatus() {
+    try {
+      const response = await fetch('/api/health');
+      const data = await response.json();
+      setDbStatus({ status: data.status, message: data.database || 'Unknown' });
+    } catch (error) {
+      setDbStatus({ status: 'error', message: 'Disconnected' });
+    }
+  }
+
   async function handleRestore(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -95,22 +115,114 @@ export default function Settings() {
     }
 
     setRestoring(true);
+    console.log('Starting JSON restore for file:', file.name);
     const reader = new FileReader();
     reader.onload = async (evt) => {
-      try {
-        const backupData = JSON.parse(evt.target?.result as string);
+      const promise = (async () => {
+        const content = evt.target?.result as string;
+        console.log('JSON file read complete. Content length:', content.length);
+        const backupData = JSON.parse(content);
+        console.log('JSON parsed successfully. Sending to server...');
         await api.post('/restore', backupData);
-        toast.success('Data restored successfully! Reloading...');
+        console.log('Restore successful. Reloading in 2s...');
         setTimeout(() => window.location.reload(), 2000);
+      })();
+
+      toast.promise(promise, {
+        loading: 'Restoring data from JSON...',
+        success: 'Data restored successfully! Reloading...',
+        error: (err: any) => `Restore failed: ${err.message || 'Invalid file format'}`
+      });
+
+      try {
+        await promise;
       } catch (error: any) {
         console.error('Restore error:', error);
-        toast.error(`Restore failed: ${error.message || 'Invalid file format'}`);
       } finally {
         setRestoring(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
     reader.readAsText(file);
+  }
+
+  async function handleDbDownload() {
+    setDbBackingUp(true);
+    try {
+      const response = await fetch('/api/db-download');
+      if (!response.ok) throw new Error('Failed to download database');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'courier_erp.db';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Database file downloaded successfully!');
+    } catch (error) {
+      console.error('DB Download error:', error);
+      toast.error('Failed to download database file.');
+    } finally {
+      setDbBackingUp(false);
+    }
+  }
+
+  async function handleDbUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.db')) {
+      toast.error('Please upload a valid .db file');
+      if (dbInputRef.current) dbInputRef.current.value = '';
+      return;
+    }
+
+    setDbRestoring(true);
+    console.log('Starting DB upload for file:', file.name);
+    const promise = (async () => {
+      const buffer = await file.arrayBuffer();
+      console.log('File read as ArrayBuffer. Size:', buffer.byteLength);
+
+      // Basic SQLite header validation
+      const header = new Uint8Array(buffer.slice(0, 16));
+      const headerString = Array.from(header).map(b => String.fromCharCode(b)).join('');
+      if (!headerString.startsWith('SQLite format 3')) {
+        throw new Error('Invalid database file format. Please upload a valid .db file.');
+      }
+
+      const response = await fetch('/api/db-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buffer
+      });
+
+      console.log('Server response status:', response.status);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Upload failed with error:', errorData);
+        throw new Error(errorData.error || `Upload failed: ${response.statusText}`);
+      }
+      
+      console.log('DB upload successful. Reloading in 2s...');
+      setTimeout(() => window.location.reload(), 2000);
+    })();
+
+    toast.promise(promise, {
+      loading: 'Uploading database file...',
+      success: 'Database file uploaded successfully! Reloading...',
+      error: (err: any) => `DB Upload failed: ${err.message}`
+    });
+
+    try {
+      await promise;
+    } catch (error: any) {
+      console.error('DB Upload error:', error);
+    } finally {
+      setDbRestoring(false);
+      if (dbInputRef.current) dbInputRef.current.value = '';
+    }
   }
 
   async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -528,6 +640,110 @@ export default function Settings() {
           <p className="text-xs text-rose-700 leading-relaxed">
             Restoring data is a destructive operation. It will permanently delete all your existing clients, entries, and invoices before importing the backup. Always take a fresh backup before performing a restore.
           </p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-8 border-b border-slate-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-50 text-amber-600 rounded-lg">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Advanced Database Management</h3>
+                <p className="text-sm text-slate-500">Directly manage the SQLite (.db) file</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
+              <div className={cn(
+                "w-2.5 h-2.5 rounded-full animate-pulse",
+                dbStatus?.status === 'ok' ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]"
+              )} />
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                DB: {dbStatus?.message || 'Checking...'}
+              </span>
+              <button 
+                onClick={checkDbStatus}
+                className="p-1 hover:bg-slate-200 rounded-md transition-colors"
+                title="Refresh database status"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="space-y-4">
+            <h4 className="font-bold text-slate-900 flex items-center gap-2">
+              <Download className="w-4 h-4 text-amber-600" />
+              Download .db File
+            </h4>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              Download the raw SQLite database file. This is the most complete backup possible.
+            </p>
+            <button 
+              onClick={handleDbDownload}
+              disabled={dbBackingUp}
+              className="w-full md:w-auto px-6 py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl hover:bg-slate-50 transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+            >
+              <Download className="w-5 h-5" />
+              {dbBackingUp ? 'Downloading...' : 'Download courier_erp.db'}
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <h4 className="font-bold text-slate-900 flex items-center gap-2">
+              <Upload className="w-4 h-4 text-rose-600" />
+              Upload .db File
+            </h4>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              Replace the current database file with a new one. <span className="text-rose-600 font-bold italic">Warning: This is a critical operation!</span>
+            </p>
+            <div className="relative">
+              <input 
+                type="file" 
+                ref={dbInputRef}
+                onChange={handleDbUpload}
+                accept=".db"
+                className="hidden"
+              />
+              {!showConfirmUpload ? (
+                <button 
+                  onClick={() => setShowConfirmUpload(true)}
+                  disabled={dbRestoring}
+                  className="w-full md:w-auto px-6 py-3 bg-white border border-rose-200 text-rose-600 font-bold rounded-xl hover:bg-rose-50 transition-all flex items-center justify-center gap-2 shadow-sm disabled:opacity-50"
+                >
+                  <Upload className="w-5 h-5" />
+                  {dbRestoring ? 'Uploading...' : 'Upload courier_erp.db'}
+                </button>
+              ) : (
+                <div className="flex flex-col gap-3 p-4 bg-rose-50 rounded-2xl border border-rose-100">
+                  <p className="text-xs font-bold text-rose-700 uppercase tracking-wider text-center">
+                    Are you absolutely sure?
+                  </p>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        setShowConfirmUpload(false);
+                        dbInputRef.current?.click();
+                      }}
+                      className="flex-1 px-4 py-2 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 transition-colors text-sm"
+                    >
+                      Yes, Upload
+                    </button>
+                    <button 
+                      onClick={() => setShowConfirmUpload(false)}
+                      className="flex-1 px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-lg hover:bg-slate-50 transition-colors text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
